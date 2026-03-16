@@ -4,12 +4,12 @@
 // =====================================================
 
 const firebaseConfig = {
-    apiKey: "AIzaSyA_JAVdtO2sJ9JX3BamSm1kLGewwbG9FpA",
-    authDomain: "eatclub-app.firebaseapp.com",
-    projectId: "eatclub-app",
-    storageBucket: "eatclub-app.firebasestorage.app",
-    messagingSenderId: "8131427840",
-    appId: "1:8131427840:web:52e9eb6c07c05d3a3262e5"
+    apiKey: "YOUR_FIREBASE_API_KEY",
+    authDomain: "YOUR_FIREBASE_AUTH_DOMAIN",
+    projectId: "YOUR_FIREBASE_PROJECT_ID",
+    storageBucket: "YOUR_FIREBASE_STORAGE_BUCKET",
+    messagingSenderId: "YOUR_FIREBASE_MESSAGING_SENDER_ID",
+    appId: "YOUR_FIREBASE_APP_ID"
 };
 
 // Initialise Firebase — AUTH and DB are used throughout the app
