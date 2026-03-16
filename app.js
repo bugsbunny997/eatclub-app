@@ -758,7 +758,29 @@ DB.collection('orders').onSnapshot(snapshot => {
     if (['admin', 'tracking', 'orderHistory'].includes(currentPage)) renderApp();
 });
 
-// 4. Auth state persistence
+// 4. Inventory Collections
+DB.collection('inventoryCategories').onSnapshot(snap => {
+    State.setState({ inventoryCategories: snap.docs.map(d => ({...d.data(), id: d.id})) });
+    if (State.getState().adminTab === 'inventory') renderApp();
+});
+DB.collection('inventoryUnits').onSnapshot(snap => {
+    State.setState({ inventoryUnits: snap.docs.map(d => ({...d.data(), id: d.id})) });
+    if (State.getState().adminTab === 'inventory') renderApp();
+});
+DB.collection('rawMaterials').onSnapshot(snap => {
+    State.setState({ rawMaterials: snap.docs.map(d => ({...d.data(), id: d.id})) });
+    if (State.getState().adminTab === 'inventory') renderApp();
+});
+DB.collection('recipes').onSnapshot(snap => {
+    State.setState({ recipes: snap.docs.map(d => ({...d.data(), id: d.id})) });
+    if (State.getState().adminTab === 'inventory') renderApp();
+});
+DB.collection('inventoryLogs').orderBy('timestamp', 'desc').limit(50).onSnapshot(snap => {
+    State.setState({ inventoryLogs: snap.docs.map(d => ({...d.data(), id: d.id})) });
+    if (State.getState().adminTab === 'inventory') renderApp();
+});
+
+// 5. Auth state persistence
 AUTH.onAuthStateChanged(async firebaseUser => {
     if (firebaseUser) {
         try {
