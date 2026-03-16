@@ -4,9 +4,14 @@
 function renderNavbar() {
   const { user, notifications } = State.getState();
   const unread = notifications.filter(n => !n.read).length;
+  const cfg = typeof BRAND_CONFIG !== 'undefined' ? BRAND_CONFIG : {};
+  const logoHtml = cfg.logoUrl
+    ? `<img src="${cfg.logoUrl}" class="nav-logo-img" data-action="goHome" alt="${cfg.appName || 'Logo'}" />`
+    : `<div class="nav-logo-text" data-action="goHome">${cfg.logoText || 'Eat'}<span>${cfg.logoAccent || 'Club'}</span></div>`;
+
   return `
   <nav class="navbar">
-    <div class="nav-logo" data-action="goHome">Eat<span>Club</span></div>
+    ${logoHtml}
     <div class="nav-actions">
       ${user ? `
         ${user.role !== 'admin' ? `
@@ -32,7 +37,8 @@ function renderNavbar() {
       `}
     </div>
   </nav>
-  ${_renderNotifPanel()}`;
+  ${_renderNotifPanel()}
+  ${_renderQrModal()}`;
 }
 
 function _renderNotifPanel() {
@@ -201,4 +207,54 @@ function renderCustomizationModal() {
       <button class="btn btn-ghost btn-block mt-8" data-action="closeCustomModal">Cancel</button>
     </div>
   </div>`;
+}
+
+// ---- QR CODE MODAL ----
+function _renderQrModal() {
+  const { qrModalBrandId } = State.getState();
+  if (!qrModalBrandId) return '';
+  const brand = getBrands().find(b => b.id === qrModalBrandId);
+  const menuUrl = `${window.location.origin}${window.location.pathname}?brand=${qrModalBrandId}`;
+  return `
+  <div class="modal-backdrop" data-action="closeQrModal">
+    <div class="qr-modal-box" onclick="event.stopPropagation()">
+      <div style="font-size:36px;margin-bottom:4px">${brand ? brand.emoji : '🍽️'}</div>
+      <h2 style="font-size:20px;font-weight:900;margin-bottom:4px">${brand ? brand.name : ''} QR Menu</h2>
+      <p class="text-muted text-sm mb-16">Customers scan this to open the menu directly.</p>
+      <div class="qr-code-wrap" id="qr-render-box"></div>
+      <div class="qr-url-chip">${menuUrl}</div>
+      <div class="flex gap-8 mt-16" style="justify-content:center;flex-wrap:wrap">
+        <button class="btn btn-primary" data-action="downloadQr">⬇️ Download PNG</button>
+        <button class="btn btn-ghost" data-action="closeQrModal">Close</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Generate QR after modal renders
+function _generateQrCode() {
+  const { qrModalBrandId } = State.getState();
+  if (!qrModalBrandId) return;
+  const box = document.getElementById('qr-render-box');
+  if (!box || box.querySelector('canvas,img')) return; // already rendered
+  const menuUrl = `${window.location.origin}${window.location.pathname}?brand=${qrModalBrandId}`;
+  if (typeof QRCode === 'undefined') {
+    box.innerHTML = `<div style="font-size:12px;color:var(--danger);padding:20px">QR library not loaded.<br/>Check your internet connection.</div>`;
+    return;
+  }
+  new QRCode(box, { text: menuUrl, width: 200, height: 200, colorDark: '#000000', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.H });
+}
+
+// Download QR PNG
+function downloadQrPng() {
+  const box = document.getElementById('qr-render-box');
+  if (!box) return;
+  const canvas = box.querySelector('canvas');
+  const img = box.querySelector('img');
+  const src = canvas ? canvas.toDataURL('image/png') : (img ? img.src : null);
+  if (!src) { showToast('QR not ready yet.', 'error'); return; }
+  const a = document.createElement('a');
+  a.download = 'menu-qr.png';
+  a.href = src;
+  a.click();
 }

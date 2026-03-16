@@ -2,7 +2,8 @@
 
 // -------- HOME PAGE --------
 function renderHomePage() {
-  const { user, searchQuery } = State.getState();
+  const { user, searchQuery, settings } = State.getState();
+  const storeOpen = isStoreCurrentlyOpen();
   return `
   ${renderNavbar()}
   <div class="page">
@@ -23,6 +24,11 @@ function renderHomePage() {
         </button>
       ` : ''}
     </div>
+
+    ${!storeOpen ? `
+      <div class="store-closed-banner container" style="max-width:800px;margin:16px auto">
+        🔴 We are currently closed. We'll be back soon — check our business hours!
+      </div>` : ''}
 
     ${searchQuery
       ? _renderSearchResults(searchQuery)
@@ -178,7 +184,8 @@ function renderBrandPage(brandId) {
     const hasAddOns = (item.addOns || []).length > 0;
     return `
             <div class="card menu-item-card ${isOutOfStock ? 'out-of-stock-card' : ''}">
-              <div class="menu-item-emoji">${item.emoji}
+              <div class="menu-item-emoji">
+                ${item.imageUrl ? `<img src="${item.imageUrl}" class="menu-item-img" alt="${item.name}" onerror="this.style.display='none';this.nextElementSibling.style.display='block'" /><span style="display:none">${item.emoji}</span>` : item.emoji}
                 ${isOutOfStock ? `<div class="oos-overlay">Out of Stock</div>` : ''}
               </div>
               <div class="menu-item-body">
@@ -307,18 +314,27 @@ function renderCheckoutPage() {
         </div>` : ''}
 
         <div class="card" style="padding:24px;margin-bottom:24px">
-          <h2 style="font-size:18px;font-weight:800;margin-bottom:16px">💳 Payment</h2>
-          <div style="display:flex;flex-direction:column;gap:10px">
-            ${['💵 Cash on Delivery', '💳 Card / UPI', '🏦 Net Banking'].map((m, i) => `
-              <label style="display:flex;align-items:center;gap:12px;cursor:pointer;padding:12px 16px;background:var(--bg-elevated);border:1px solid ${i === 0 ? 'var(--border-accent)' : 'var(--border)'};border-radius:var(--radius-md)">
-                <input type="radio" name="pay" ${i === 0 ? 'checked' : ''} /> ${m}
-              </label>
-            `).join('')}
+          <h2 style="font-size:18px;font-weight:800;margin-bottom:16px">💳 Payment Method</h2>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <label class="payment-method-option ${State.getState().selectedPaymentMethod !== 'online' ? 'selected' : ''}" id="pay-cod-label">
+              <input type="radio" name="pay" value="cod" id="pay-cod" data-action="selectPaymentMethod" data-method="cod" ${State.getState().selectedPaymentMethod !== 'online' ? 'checked' : ''} />
+              <span>💵 Cash on Delivery</span>
+              <span class="razorpay-badge">No charges</span>
+            </label>
+            <label class="payment-method-option ${State.getState().selectedPaymentMethod === 'online' ? 'selected' : ''}" id="pay-online-label">
+              <input type="radio" name="pay" value="online" id="pay-online" data-action="selectPaymentMethod" data-method="online" ${State.getState().selectedPaymentMethod === 'online' ? 'checked' : ''} />
+              <span>💳 Pay Online — UPI / Card / NetBanking</span>
+              <span class="razorpay-badge">Powered by Razorpay</span>
+            </label>
           </div>
+          ${State.getState().selectedPaymentMethod === 'online' ? `
+          <div style="margin-top:12px;padding:12px 16px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:var(--radius-md);font-size:12px;color:var(--success)">
+            ✅ Secure payment via Razorpay. UPI, Cards, NetBanking all supported.
+          </div>` : ''}
         </div>
 
         <button class="btn btn-primary btn-block btn-lg" data-action="placeOrder">
-          🎉 Place Order — ₹${grand}
+          ${State.getState().selectedPaymentMethod === 'online' ? '💳 Pay & Place Order' : '🎉 Place Order'} — ₹${grand}
         </button>
       </div>
 
@@ -600,6 +616,27 @@ function renderTrackingPage(orderId) {
       `).join('')}
     </div>
 
+    ${['received', 'accepted'].includes(order.status) ? `
+    <div class="cancel-order-section">
+      <div style="font-weight:700;margin-bottom:12px;color:var(--danger)">Cancel Order</div>
+      <select class="cancel-reason-select" id="cancel-reason-select">
+        <option value="">Select a reason...</option>
+        <option value="Changed my mind">Changed my mind</option>
+        <option value="Ordered by mistake">Ordered by mistake</option>
+        <option value="Delivery taking too long">Delivery taking too long</option>
+        <option value="Found a better option">Found a better option</option>
+        <option value="Other">Other</option>
+      </select>
+      <button class="btn btn-ghost btn-sm" style="color:var(--danger);border:1px solid var(--danger)" data-action="cancelMyOrder" data-order="${orderId}">
+        Cancel This Order
+      </button>
+    </div>` : order.status === 'cancelled' ? `
+    <div style="text-align:center;padding:20px;background:rgba(239,68,68,0.08);border-radius:var(--radius-md);border:1px solid rgba(239,68,68,0.2)">
+      <div style="font-size:32px;margin-bottom:8px">❌</div>
+      <div style="font-weight:800;color:var(--danger)">Order Cancelled</div>
+      ${order.cancelReason ? `<div class="text-muted text-sm mt-4">${order.cancelReason}</div>` : ''}
+    </div>` : ''}
+
     <div class="mt-24">
       <button class="btn btn-secondary" data-action="goHome">← Back to Home</button>
     </div>
@@ -629,6 +666,7 @@ function renderAdminDashboard() {
       <button class="admin-nav-tab ${adminTab === 'promos' ? 'active' : ''}" data-action="adminSetTab" data-tab="promos">🏷️ Promos</button>
       <button class="admin-nav-tab ${adminTab === 'analytics' ? 'active' : ''}" data-action="adminSetTab" data-tab="analytics">📊 Analytics</button>
       <button class="admin-nav-tab ${adminTab === 'inventory' ? 'active' : ''}" data-action="adminSetTab" data-tab="inventory">📦 Inventory</button>
+      <button class="admin-nav-tab ${adminTab === 'settings' ? 'active' : ''}" data-action="adminSetTab" data-tab="settings">⚙️ Settings</button>
     </div>
 
     <div class="admin-tab-content">
@@ -637,6 +675,7 @@ function renderAdminDashboard() {
       ${adminTab === 'promos' ? _renderAdminPromosTab() : ''}
       ${adminTab === 'analytics' ? _renderAdminAnalyticsTab() : ''}
       ${adminTab === 'inventory' ? _renderAdminInventoryTab() : ''}
+      ${adminTab === 'settings' ? _renderAdminSettingsTab() : ''}
     </div>
   </div>`;
 }
@@ -737,6 +776,14 @@ function _renderAdminBrandsTab() {
               </div>
               <div id="mi-disc-preview" style="font-size:13px;color:var(--accent);margin-bottom:12px;min-height:18px"></div>
               <div class="form-group"><label class="form-label">Description (Optional)</label><input class="form-input" id="mi-desc" placeholder="Short description..." /></div>
+              <div class="form-group">
+                <label class="form-label">Photo <span class="text-muted">(optional)</span></label>
+                <label class="upload-img-btn">
+                  📷 Upload Photo
+                  <input type="file" id="mi-img-input" accept="image/*" onchange="handleAction('uploadMenuImg',{brand:'${brand.id}'},event)" />
+                </label>
+                <div id="mi-img-preview"></div>
+              </div>
               <button class="btn btn-primary" data-action="adminAddMenuItem" data-brand="${brand.id}" ${!(brand.categories || []).length ? 'disabled' : ''}>Add Item</button>
             </div>
           </div>
@@ -799,6 +846,7 @@ function _renderAdminBrandsTab() {
       <div class="flex-between mb-24">
         <h2 style="font-size:22px;font-weight:900">All Brands (${allBrands.length})</h2>
       </div>
+
       <div class="grid-2" style="margin-bottom:32px">
         ${allBrands.map(brand => `
           <div class="card" style="padding:16px;cursor:pointer;position:relative" data-action="adminBrandDetail" data-brand="${brand.id}">
@@ -808,6 +856,7 @@ function _renderAdminBrandsTab() {
                 <div style="font-weight:800">${brand.name}</div>
                 <div class="text-muted text-sm">${(brand.menu || []).length} items · ${brand.deliveryTime}</div>
               </div>
+              <button class="btn btn-ghost btn-sm" style="z-index:2;font-size:12px" data-action="showQrModal" data-brand="${brand.id}" onclick="event.stopPropagation()" title="Generate QR Menu">📱 QR</button>
               <button class="btn btn-ghost btn-sm" style="z-index:2" data-action="adminDeleteBrand" data-brand="${brand.id}" onclick="event.stopPropagation()">🗑️</button>
             </div>
           </div>
@@ -1076,15 +1125,27 @@ function renderOrderDetail(order) {
       ` : ''}
       ${order.status === 'dispatched' ? `<button class="btn btn-success btn-lg" data-action="adminDelivered" data-order="${order.id}">🎉 Mark as Delivered</button>` : ''}
       ${order.status === 'delivered' ? `<div class="badge badge-success" style="font-size:15px;padding:10px 20px">🎉 Order Completed!</div>` : ''}
+      ${order.status === 'cancelled' ? `<div class="badge badge-cancelled" style="font-size:14px;padding:10px 20px">❌ Cancelled${order.cancelReason ? ' — ' + order.cancelReason : ''}</div>` : ''}
+      ${['received', 'accepted'].includes(order.status) ? `
+        <div style="margin-top:12px">
+          <select class="cancel-reason-select" id="admin-cancel-reason-${order.id}" style="margin-bottom:8px">
+            <option value="">Reason for cancellation...</option>
+            <option value="Item out of stock">Item out of stock</option>
+            <option value="Unable to deliver to area">Unable to deliver to area</option>
+            <option value="Restaurant too busy">Restaurant too busy</option>
+            <option value="Customer not reachable">Customer not reachable</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger);border:1px solid var(--danger)" data-action="adminCancelOrder" data-order="${order.id}">Cancel Order</button>
+        </div>` : ''}
     </div>
   </div>`;
 }
 
 function statusBadgeClass(status) {
-  return { received: 'badge-warning', accepted: 'badge-info', ready: 'badge-accent', dispatched: 'badge-info', delivered: 'badge-success' }[status] || 'badge-muted';
+  return { received: 'badge-warning', accepted: 'badge-info', ready: 'badge-accent', dispatched: 'badge-info', delivered: 'badge-success', cancelled: 'badge-cancelled' }[status] || 'badge-muted';
 }
 function statusLabel(status) {
-  return { received: '📋 Received', accepted: '👨‍🍳 Preparing', ready: '✅ Ready', dispatched: '🛵 Dispatched', delivered: '🎉 Delivered' }[status] || status;
+  return { received: '📋 Received', accepted: '👨‍🍳 Preparing', ready: '✅ Ready', dispatched: '🛵 Dispatched', delivered: '🎉 Delivered', cancelled: '❌ Cancelled' }[status] || status;
 }
 
 // ============================================================
@@ -1471,4 +1532,110 @@ function invSetQty(id, newQty) {
   setRawMaterialQty(id, parseInt(newQty, 10))
     .then(() => {})
     .catch(() => showToast('Could not update qty.', 'error'));
+}
+
+// ====================================================
+// ===== ADMIN: SETTINGS TAB ==========================
+// ====================================================
+
+function _renderAdminSettingsTab() {
+  const { settings } = State.getState();
+  const bh = (settings && settings.businessHours) || {
+    mon: { open: '10:00', close: '22:00', closed: false },
+    tue: { open: '10:00', close: '22:00', closed: false },
+    wed: { open: '10:00', close: '22:00', closed: false },
+    thu: { open: '10:00', close: '22:00', closed: false },
+    fri: { open: '10:00', close: '23:00', closed: false },
+    sat: { open: '10:00', close: '23:00', closed: false },
+    sun: { open: '11:00', close: '22:00', closed: false },
+  };
+  const isOpen = settings ? settings.storeOpen !== false : true;
+  const DAY_LABELS = { mon:'Mon', tue:'Tue', wed:'Wed', thu:'Thu', fri:'Fri', sat:'Sat', sun:'Sun' };
+  const cfg = typeof BRAND_CONFIG !== 'undefined' ? BRAND_CONFIG : {};
+
+  return `
+  <div style="padding:24px;max-width:860px">
+    <h2 style="font-size:22px;font-weight:900;margin-bottom:28px">Settings</h2>
+
+    <!-- STORE STATUS -->
+    <div class="card settings-section" style="padding:24px;margin-bottom:24px">
+      <div class="settings-section-title">Store Status</div>
+      <label style="display:flex;align-items:center;gap:12px;cursor:pointer;font-weight:600;font-size:15px">
+        <input type="checkbox" id="store-open-toggle" ${isOpen ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--accent)" data-action="toggleStoreOpen" />
+        ${isOpen ? '<span style="color:var(--success)">Store is OPEN — accepting orders</span>' : '<span style="color:var(--danger)">Store is CLOSED — not accepting orders</span>'}
+      </label>
+      <p class="text-muted text-sm mt-8">Override business hours with a manual open/close switch.</p>
+    </div>
+
+    <!-- BUSINESS HOURS -->
+    <div class="card settings-section" style="padding:24px;margin-bottom:24px">
+      <div class="settings-section-title">Business Hours</div>
+      <p class="text-muted text-sm mb-16">Set your opening and closing times for each day of the week.</p>
+      <div class="hours-grid">
+        ${Object.entries(bh).map(([day, times]) => `
+          <div>
+            <div class="hours-day-label">${DAY_LABELS[day] || day}</div>
+            <div class="hours-input-pair">
+              <input type="time" id="bh-open-${day}" value="${times.open || '10:00'}" ${times.closed ? 'disabled' : ''} />
+              <input type="time" id="bh-close-${day}" value="${times.close || '22:00'}" ${times.closed ? 'disabled' : ''} />
+              <label style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-muted);cursor:pointer;margin-top:4px;justify-content:center">
+                <input type="checkbox" id="bh-closed-${day}" ${times.closed ? 'checked' : ''} style="accent-color:var(--danger)" />
+                Closed
+              </label>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      <button class="hours-save-btn" data-action="saveBusinessHours">💾 Save Business Hours</button>
+    </div>
+
+    <!-- WHATSAPP NOTIFICATIONS -->
+    <div class="card settings-section" style="padding:24px;margin-bottom:24px">
+      <div class="settings-section-title">WhatsApp Notifications</div>
+      <p class="text-muted text-sm mb-16">Get WhatsApp alerts on every new order. Enter the restaurant owner number.</p>
+      <div class="form-row" style="align-items:flex-end">
+        <div class="form-group" style="flex:2">
+          <label class="form-label">WhatsApp Number (with country code)</label>
+          <input class="form-input" id="wa-number" placeholder="919876543210" value="${cfg.ownerWhatsApp || ''}" />
+        </div>
+        <button class="btn btn-primary" data-action="saveWhatsAppNumber">Save</button>
+      </div>
+      <p class="text-muted text-sm mt-8">Orders will open a WhatsApp chat for quick alerting. Full automation via WATI/Twilio available on upgrade.</p>
+    </div>
+
+    <!-- RAZORPAY SETTINGS -->
+    <div class="card settings-section" style="padding:24px;margin-bottom:24px">
+      <div class="settings-section-title">Razorpay Payment Gateway</div>
+      <p class="text-muted text-sm mb-16">Add your Razorpay Key ID to accept online payments. Get it from <span style="color:var(--accent)">dashboard.razorpay.com</span></p>
+      <div class="form-group">
+        <label class="form-label">Razorpay Key ID</label>
+        <input class="form-input" id="rzp-key" placeholder="rzp_live_XXXXXXXXXXXXXXXX" value="${cfg.razorpayKeyId !== 'rzp_test_REPLACE_WITH_YOUR_KEY' ? cfg.razorpayKeyId : ''}" />
+      </div>
+      <p class="text-muted text-sm mt-8 mb-12">Use <strong>rzp_test_</strong> prefix for testing, <strong>rzp_live_</strong> for production.</p>
+      <button class="btn btn-primary" data-action="saveRazorpayKey">Save Key</button>
+    </div>
+
+    <!-- BRAND IDENTITY -->
+    <div class="card settings-section" style="padding:24px;margin-bottom:24px">
+      <div class="settings-section-title">Brand Identity</div>
+      <p class="text-muted text-sm mb-16">Customize the app name, logo, and accent color for this client. Changes take effect after page reload.</p>
+      <div class="form-group">
+        <label class="form-label">App Name</label>
+        <input class="form-input" id="brand-name-input" value="${cfg.appName || 'EatClub'}" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Accent Color</label>
+        <div style="display:flex;gap:12px;align-items:center">
+          <input type="color" id="brand-color-input" value="${cfg.accent || '#ff6b2c'}" style="width:48px;height:36px;cursor:pointer;border:none;border-radius:8px;background:none" />
+          <span class="text-muted text-sm" id="brand-color-preview">${cfg.accent || '#ff6b2c'}</span>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Logo URL <span class="text-muted">(leave blank to use text logo)</span></label>
+        <input class="form-input" id="brand-logo-input" placeholder="https://yourdomain.com/logo.png" value="${cfg.logoUrl || ''}" />
+      </div>
+      <p class="text-muted text-sm mt-8">Edit <strong>brand-config.js</strong> directly for permanent changes, or use this form to preview.</p>
+      <button class="btn btn-primary mt-12" data-action="previewBrandConfig">👁️ Apply Preview</button>
+    </div>
+  </div>`;
 }

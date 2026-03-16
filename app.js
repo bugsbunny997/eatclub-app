@@ -270,6 +270,17 @@ function handleAction(action, dataset, e) {
             break;
         }
         case 'removePromoCode': removePromoCode(); renderApp(); break;
+        case 'selectPaymentMethod': {
+            const method = dataset.method || 'cod';
+            State.setState({ selectedPaymentMethod: method });
+            // Update visual selection without full re-render
+            document.querySelectorAll('.payment-method-option').forEach(el => el.classList.remove('selected'));
+            const selectedLabel = document.getElementById(`pay-${method}-label`);
+            if (selectedLabel) selectedLabel.classList.add('selected');
+            renderApp();
+            break;
+        }
+
         case 'placeOrder': {
             const name = document.getElementById('co-name')?.value.trim();
             const phone = document.getElementById('co-phone')?.value.trim();
@@ -277,15 +288,56 @@ function handleAction(action, dataset, e) {
             const scheduleEl = document.getElementById('co-schedule');
             const scheduledFor = scheduleEl?.value ? new Date(scheduleEl.value).toISOString() : null;
             if (!name || !phone || !address) { showToast('Please fill in delivery details.', 'error'); return; }
-            placeOrder({ name, phone, address, scheduledFor })
-                .then(orderId => {
-                    if (orderId) {
-                        showToast('\ud83c\udf89 Order placed! Tracking your delivery...', 'success');
-                        if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
-                        navigate('tracking', { currentOrderId: orderId });
-                    }
-                })
-                .catch(err => showToast('Error: ' + err.message, 'error'));
+
+            const { selectedPaymentMethod } = State.getState();
+            const cfg = typeof BRAND_CONFIG !== 'undefined' ? BRAND_CONFIG : {};
+            const totals = cartGrandTotal();
+
+            if (selectedPaymentMethod === 'online') {
+                // Razorpay flow
+                const rzpKey = cfg.razorpayKeyId || '';
+                if (!rzpKey || rzpKey.includes('REPLACE')) {
+                    showToast('Razorpay is not configured. Please set up your key in Settings.', 'error');
+                    return;
+                }
+                const options = {
+                    key: rzpKey,
+                    amount: totals.grand * 100, // paise
+                    currency: 'INR',
+                    name: cfg.razorpayCompanyName || cfg.appName || 'EatClub',
+                    description: cfg.razorpayDescription || 'Food Order Payment',
+                    theme: { color: cfg.razorpayThemeColor || cfg.accent || '#ff6b2c' },
+                    prefill: { name, contact: phone },
+                    handler: function(response) {
+                        // Payment success — place order with paymentId
+                        placeOrder({ name, phone, address, scheduledFor, paymentId: response.razorpay_payment_id })
+                            .then(orderId => {
+                                if (orderId) {
+                                    showToast('🎉 Payment successful! Order placed.', 'success');
+                                    if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+                                    navigate('tracking', { currentOrderId: orderId });
+                                }
+                            })
+                            .catch(err => showToast('Error: ' + err.message, 'error'));
+                    },
+                    modal: { ondismiss: () => showToast('Payment cancelled.', 'info') },
+                };
+                const rzp = new Razorpay(options);
+                rzp.open();
+            } else {
+                // Cash on Delivery
+                placeOrder({ name, phone, address, scheduledFor })
+                    .then(orderId => {
+                        if (orderId) {
+                            showToast('🎉 Order placed! Tracking your delivery...', 'success');
+                            if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+                            // WhatsApp notification to owner (if configured)
+                            _notifyOwnerWhatsApp(orderId);
+                            navigate('tracking', { currentOrderId: orderId });
+                        }
+                    })
+                    .catch(err => showToast('Error: ' + err.message, 'error'));
+            }
             break;
         }
 
@@ -398,6 +450,9 @@ function handleAction(action, dataset, e) {
             const itemData = { name, emoji, category: cat, price, desc, effectivePrice };
             if (discPct > 0) itemData.discountPct = discPct;
             if (salePriceRaw > 0) itemData.salePrice = salePriceRaw;
+            // Pick up uploaded image URL if any
+            const imgUrlEl = document.getElementById('mi-img-url');
+            if (imgUrlEl && imgUrlEl.value) { itemData.imageUrl = imgUrlEl.value; imgUrlEl.value = ''; }
             addMenuItem(brandId, itemData)
                 .then(() => { showToast(`${emoji} ${name} added!`, 'success'); renderApp(); })
                 .catch(err => showToast('Error: ' + err.message, 'error'));
@@ -678,6 +733,160 @@ function handleAction(action, dataset, e) {
                 .then(() => { showToast('Recipe deleted.', 'info'); renderApp(); })
                 .catch(err => showToast('Error: ' + err.message, 'error'));
             break;
+
+        // ---- QR CODE ----
+        case 'showQrModal':
+            State.setState({ qrModalBrandId: dataset.brand });
+            renderApp();
+            // Generate QR after DOM updates
+            setTimeout(_generateQrCode, 80);
+            break;
+
+        case 'closeQrModal':
+            State.setState({ qrModalBrandId: null });
+            renderApp();
+            break;
+
+        case 'downloadQr':
+            downloadQrPng();
+            break;
+
+        // ---- ORDER CANCELLATION (Customer) ----
+        case 'cancelMyOrder': {
+            const reason = document.getElementById('cancel-reason-select')?.value;
+            if (!reason) { showToast('Please select a reason for cancellation.', 'error'); return; }
+            const orderId = dataset.order;
+            const order = getOrder(orderId);
+            if (!order || !['received','accepted'].includes(order.status)) {
+                showToast('This order cannot be cancelled at this stage.', 'error'); return;
+            }
+            if (!confirm('Cancel this order?')) return;
+            cancelOrder(orderId, reason)
+                .then(() => { showToast('Order cancelled.', 'info'); renderApp(); })
+                .catch(err => showToast('Error: ' + err.message, 'error'));
+            break;
+        }
+
+        // ---- ORDER CANCELLATION (Admin) ----
+        case 'adminCancelOrder': {
+            const orderId = dataset.order;
+            const reason = document.getElementById(`admin-cancel-reason-${orderId}`)?.value;
+            if (!reason) { showToast('Please select a cancellation reason.', 'error'); return; }
+            if (!confirm('Cancel this order? Customer will be notified.')) return;
+            adminCancelOrder(orderId, reason)
+                .then(() => { showToast('Order cancelled.', 'info'); renderApp(); })
+                .catch(err => showToast('Error: ' + err.message, 'error'));
+            break;
+        }
+
+        // ---- BUSINESS HOURS ----
+        case 'saveBusinessHours': {
+            const days = ['mon','tue','wed','thu','fri','sat','sun'];
+            const hours = {};
+            days.forEach(day => {
+                const open = document.getElementById(`bh-open-${day}`)?.value || '10:00';
+                const close = document.getElementById(`bh-close-${day}`)?.value || '22:00';
+                const closed = document.getElementById(`bh-closed-${day}`)?.checked || false;
+                hours[day] = { open, close, closed };
+            });
+            saveBusinessHours(hours)
+                .then(() => { showToast('Business hours saved!', 'success'); renderApp(); })
+                .catch(err => showToast('Error: ' + err.message, 'error'));
+            break;
+        }
+
+        case 'toggleStoreOpen': {
+            const isOpen = document.getElementById('store-open-toggle')?.checked;
+            saveStoreStatus(!!isOpen)
+                .then(() => {
+                    showToast(isOpen ? '✅ Store is now OPEN' : '🔴 Store is now CLOSED', isOpen ? 'success' : 'info');
+                    renderApp();
+                })
+                .catch(err => showToast('Error: ' + err.message, 'error'));
+            break;
+        }
+
+        // ---- WHATSAPP NUMBER ----
+        case 'saveWhatsAppNumber': {
+            const num = document.getElementById('wa-number')?.value.trim();
+            if (num && !/^\d{10,15}$/.test(num)) { showToast('Enter a valid number with country code (digits only).', 'error'); return; }
+            // Save to Firestore settings
+            DB.collection('settings').doc('config').set({ ownerWhatsApp: num }, { merge: true })
+                .then(() => { showToast('WhatsApp number saved!', 'success'); })
+                .catch(err => showToast('Error: ' + err.message, 'error'));
+            break;
+        }
+
+        // ---- RAZORPAY KEY ----
+        case 'saveRazorpayKey': {
+            const key = document.getElementById('rzp-key')?.value.trim();
+            if (!key) { showToast('Please enter a Razorpay Key ID.', 'error'); return; }
+            DB.collection('settings').doc('config').set({ razorpayKeyId: key }, { merge: true })
+                .then(() => { showToast('Razorpay key saved! Update brand-config.js with this key for persistence.', 'success', 5000); })
+                .catch(err => showToast('Error: ' + err.message, 'error'));
+            break;
+        }
+
+        // ---- BRAND CONFIG PREVIEW ----
+        case 'previewBrandConfig': {
+            const appName = document.getElementById('brand-name-input')?.value.trim();
+            const color = document.getElementById('brand-color-input')?.value;
+            const logoUrl = document.getElementById('brand-logo-input')?.value.trim();
+
+            if (appName && typeof BRAND_CONFIG !== 'undefined') {
+                // Split name into logo parts (first word = logoText, rest = logoAccent)
+                const parts = appName.split(' ');
+                BRAND_CONFIG.appName    = appName;
+                BRAND_CONFIG.logoText   = parts[0] || appName;
+                BRAND_CONFIG.logoAccent = parts.slice(1).join(' ') || '';
+                document.title = appName + ' — Order Food Online';
+                const metaDesc = document.querySelector('meta[name="description"]');
+                if (metaDesc) metaDesc.setAttribute('content', 'Order from ' + appName + '. Fast delivery, great food.');
+            }
+            if (color && typeof BRAND_CONFIG !== 'undefined') {
+                BRAND_CONFIG.accent      = color;
+                BRAND_CONFIG.accentLight = color;
+                BRAND_CONFIG.razorpayThemeColor = color;
+                // Derive a lighter glow from the color
+                const glow = color + '30';
+                document.documentElement.style.setProperty('--accent',         color);
+                document.documentElement.style.setProperty('--accent-light',   color);
+                document.documentElement.style.setProperty('--accent-glow',    glow);
+                document.documentElement.style.setProperty('--border-accent',  color + '55');
+                document.documentElement.style.setProperty('--shadow-accent',  '0 0 24px ' + color + '40');
+            }
+            if (logoUrl !== undefined && typeof BRAND_CONFIG !== 'undefined') {
+                BRAND_CONFIG.logoUrl = logoUrl;
+            }
+            // Re-render entire app so navbar, buttons, prices all reflect new brand
+            renderApp();
+            showToast('Brand preview applied across the app! ✅', 'success');
+            break;
+        }
+
+        // ---- MENU ITEM IMAGE UPLOAD ----
+        case 'uploadMenuImg': {
+            const input = document.getElementById('mi-img-input');
+            if (!input || !input.files[0]) return;
+            const file = input.files[0];
+            if (file.size > 5 * 1024 * 1024) { showToast('Image must be under 5MB.', 'error'); return; }
+            const brandId = dataset.brand;
+            const tmpId = 'preview_' + Date.now();
+            showToast('Uploading image...', 'info');
+            uploadMenuItemImage(brandId, tmpId, file)
+                .then(url => {
+                    // Store URL in a temp element so adminAddMenuItem can pick it up
+                    let urlEl = document.getElementById('mi-img-url');
+                    if (!urlEl) { urlEl = document.createElement('input'); urlEl.id = 'mi-img-url'; urlEl.type = 'hidden'; document.body.appendChild(urlEl); }
+                    urlEl.value = url;
+                    // Show preview
+                    const preview = document.getElementById('mi-img-preview');
+                    if (preview) preview.innerHTML = `<img src="${url}" class="menu-item-img" style="margin-top:8px" />`;
+                    showToast('Image uploaded!', 'success');
+                })
+                .catch(() => showToast('Upload failed. Check Firebase Storage is enabled.', 'error'));
+            break;
+        }
     }
 }
 
@@ -780,7 +989,20 @@ DB.collection('inventoryLogs').orderBy('timestamp', 'desc').limit(50).onSnapshot
     if (State.getState().adminTab === 'inventory') renderApp();
 });
 
-// 5. Auth state persistence
+// 5. Settings (business hours + store status)
+DB.collection('settings').onSnapshot(snap => {
+    let settings = State.getState().settings || {};
+    snap.docs.forEach(doc => {
+        if (doc.id === 'businessHours') settings = { ...settings, businessHours: doc.data().hours };
+        if (doc.id === 'storeStatus') settings = { ...settings, storeOpen: doc.data().isOpen };
+        if (doc.id === 'config') settings = { ...settings, ...doc.data() };
+    });
+    State.setState({ settings });
+    const { currentPage, adminTab } = State.getState();
+    if (currentPage === 'home' || (currentPage === 'admin' && adminTab === 'settings')) renderApp();
+});
+
+// 6. Auth state persistence
 AUTH.onAuthStateChanged(async firebaseUser => {
     if (firebaseUser) {
         try {
@@ -791,4 +1013,50 @@ AUTH.onAuthStateChanged(async firebaseUser => {
         State.setState({ user: null, authLoading: false });
     }
     renderApp();
+});
+
+// ── QR Deep-link: ?brand=burger-house opens brand page directly ──
+(function handleDeepLink() {
+    const params = new URLSearchParams(window.location.search);
+    const brandId = params.get('brand');
+    if (brandId) {
+        // Wait for auth state then navigate
+        const unsub = State.subscribe(() => {
+            const { authLoading } = State.getState();
+            if (!authLoading) {
+                navigate('brand', { currentBrandId: brandId });
+                unsub && unsub(); // unsubscribe
+            }
+        });
+    }
+})();
+
+// ── WhatsApp Owner Notification ──────────────────────────────────────
+function _notifyOwnerWhatsApp(orderId) {
+    const cfg = typeof BRAND_CONFIG !== 'undefined' ? BRAND_CONFIG : {};
+    const { settings } = State.getState();
+    const ownerNum = (settings && settings.ownerWhatsApp) || cfg.ownerWhatsApp || '';
+    if (!ownerNum) return;
+    const order = getOrder(orderId);
+    if (!order) return;
+    const items = order.items.map(c => `${c.item.emoji} ${c.item.name} x${c.qty}`).join(', ');
+    const msg = encodeURIComponent(
+        `New Order Alert! #${orderId.slice(-6)}\nBrand: ${order.brandName}\nCustomer: ${order.customer.name} | ${order.customer.phone}\nItems: ${items}\nTotal: ₹${order.total}\nAddress: ${order.customer.address}`
+    );
+    // Opens WhatsApp chat (non-intrusive — admin can click from notification)
+    window.open(`https://wa.me/${ownerNum}?text=${msg}`, '_blank');
+}
+
+// ── Live color picker preview ────────────────────────────────────────
+document.addEventListener('input', function(e) {
+    if (e.target.id === 'brand-color-input') {
+        const val = e.target.value;
+        const preview = document.getElementById('brand-color-preview');
+        if (preview) preview.textContent = val;
+        // Live CSS variable update as user drags picker
+        document.documentElement.style.setProperty('--accent', val);
+        document.documentElement.style.setProperty('--accent-light', val);
+        document.documentElement.style.setProperty('--accent-glow', val + '30');
+        document.documentElement.style.setProperty('--border-accent', val + '55');
+    }
 });

@@ -4,12 +4,24 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- SEO & Social -->
   <title>EatClub — Order Food Online</title>
   <meta name="description" content="Order from your favourite restaurants. Fast delivery, top brands." />
+  <meta name="theme-color" content="#0d0f14" />
+  <meta property="og:title" content="EatClub — Order Food Online" />
+  <meta property="og:description" content="Order from the best local brands. Fast delivery, great food." />
+  <meta property="og:type" content="website" />
+
+  <!-- Favicon (emoji fallback) -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍽️</text></svg>" />
+
+  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
-    rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
+  <!-- App Styles -->
   <link rel="stylesheet" href="style.css" />
 </head>
 
@@ -17,12 +29,24 @@
   <div id="app"></div>
   <div id="toast-container"></div>
   <div id="modal-root"></div>
-  <!-- Firebase SDK (loaded first so AUTH + DB are available globally) -->
+
+  <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-storage-compat.js"></script>
   <script src="firebase-config.js"></script>
-  <!-- App scripts -->
+
+  <!-- QR Code library (for QR menu generator) -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+
+  <!-- Razorpay Payment Gateway -->
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+
+  <!-- Brand Config (theming — loaded before app scripts) -->
+  <script src="brand-config.js"></script>
+
+  <!-- App Scripts -->
   <script src="data.js"></script>
   <script src="state.js"></script>
   <script src="components.js"></script>

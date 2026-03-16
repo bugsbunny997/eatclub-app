@@ -1,0 +1,154 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── HELPERS ───────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Role check: reads role from the users collection in Firestore
+    // (never trust client-side role — always verify server-side)
+    function isAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isCustomer() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'customer';
+    }
+
+    // ─── USERS ─────────────────────────────────────────────────
+    match /users/{userId} {
+      // Anyone can create their own user doc on registration
+      allow create: if isOwner(userId) &&
+        request.resource.data.role == 'customer' && // New registrations are always customers
+        request.resource.data.uid == userId;
+
+      // Users can read and update their own doc only
+      allow read, update: if isOwner(userId);
+
+      // Admins can read all user docs (for order customer info)
+      allow read: if isAdmin();
+
+      // Nobody can delete user docs from the client
+      allow delete: if false;
+    }
+
+    // ─── BRANDS ────────────────────────────────────────────────
+    match /brands/{brandId} {
+      // Anyone can read brands (public menu)
+      allow read: if true;
+
+      // Only admins can create / update / delete brands
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ─── ORDERS ────────────────────────────────────────────────
+    match /orders/{orderId} {
+      // Customers can create orders for themselves
+      allow create: if isSignedIn() &&
+        request.resource.data.customerId == request.auth.uid;
+
+      // Customers can read their own orders
+      allow read: if isSignedIn() &&
+        resource.data.customerId == request.auth.uid;
+
+      // Customers can update only 'rated' and 'cancelledAt/cancelReason' fields (cancel + rate)
+      allow update: if isSignedIn() &&
+        resource.data.customerId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['rated', 'status', 'cancelledAt', 'cancelReason']);
+
+      // Admins can read and update all orders (status management)
+      allow read, update: if isAdmin();
+
+      // Nobody can delete orders
+      allow delete: if false;
+    }
+
+    // ─── RATINGS ───────────────────────────────────────────────
+    match /ratings/{ratingId} {
+      // Anyone can read ratings
+      allow read: if true;
+
+      // Signed-in users can create ratings for their own orders
+      allow create: if isSignedIn() &&
+        request.resource.data.customerId == request.auth.uid;
+
+      // No updates or deletes
+      allow update, delete: if false;
+    }
+
+    // ─── PROMO CODES ───────────────────────────────────────────
+    match /promoCodes/{code} {
+      // Anyone signed in can read promo codes (to validate at checkout)
+      allow read: if isSignedIn();
+
+      // Only admins can create, update, delete promos
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ─── PROMO USAGE TRACKING (per-user, per-code) ─────────────
+    match /promoUsage/{usageId} {
+      // Users can read their own usage records
+      allow read: if isSignedIn() &&
+        resource.data.userId == request.auth.uid;
+
+      // Users can create usage records for themselves only
+      allow create: if isSignedIn() &&
+        request.resource.data.userId == request.auth.uid;
+
+      // No updates or deletes
+      allow update, delete: if false;
+    }
+
+    // ─── INVENTORY ─────────────────────────────────────────────
+    match /inventoryCategories/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /inventoryUnits/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /rawMaterials/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /recipes/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /inventoryLogs/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ─── BUSINESS SETTINGS ─────────────────────────────────────
+    match /settings/{docId} {
+      // Anyone can read settings (needed for business hours check on home page)
+      allow read: if true;
+
+      // Only admins can write settings
+      allow write: if isAdmin();
+    }
+
+    // ─── QR MENUS ──────────────────────────────────────────────
+    match /qrMenus/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ─── CATCH-ALL: deny everything else ──────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

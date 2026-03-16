@@ -27,6 +27,12 @@ const State = (() => {
         recipes: [],               // [{ id, menuItemId, brandId, name, ingredients:[{rawMaterialId,name,qty,unitAbbr}] }]
         inventoryLogs: [],         // [{ id, orderId, type, timestamp, changes }]
         inventoryTab: 'stock',     // 'configure'|'stock'|'recipes'|'logs'
+        // ---- SETTINGS / BUSINESS HOURS ----
+        settings: null,            // { businessHours: {mon:{open,close,closed},...}, storeOpen: true }
+        // ---- QR MODAL ----
+        qrModalBrandId: null,      // brand id for which QR is shown
+        // ---- PAYMENT ----
+        selectedPaymentMethod: 'cod', // 'cod' | 'online'
     };
 
     const _listeners = [];
@@ -154,7 +160,7 @@ function cancelLoyaltyRedemption() {
 
 // ===== PROMO CODES =====
 function applyPromoCode(code) {
-    const { promoCodes } = State.getState();
+    const { promoCodes, user } = State.getState();
     const promo = promoCodes[code.toUpperCase()];
     if (!promo) return { error: 'Promo code not found.' };
     if (!promo.active) return { error: 'This promo code is no longer active.' };
@@ -162,8 +168,34 @@ function applyPromoCode(code) {
     if (promo.minOrder && total < promo.minOrder) {
         return { error: `Minimum order of ₹${promo.minOrder} required for this code.` };
     }
+    // Per-user promo limit: check promoUsage collection
+    if (user && promo.maxUsesPerUser) {
+        return DB.collection('promoUsage')
+            .where('userId', '==', user.uid)
+            .where('code', '==', code.toUpperCase())
+            .get()
+            .then(snap => {
+                if (snap.size >= (promo.maxUsesPerUser || 1)) {
+                    return { error: 'You have already used this promo code.' };
+                }
+                State.setState({ appliedPromo: { code: code.toUpperCase(), discount: promo.discount } });
+                return { success: true, discount: promo.discount };
+            });
+    }
     State.setState({ appliedPromo: { code: code.toUpperCase(), discount: promo.discount } });
     return { success: true, discount: promo.discount };
+}
+
+// Track promo usage in Firestore after order is placed
+function recordPromoUsage(code, orderId) {
+    const { user } = State.getState();
+    if (!user || !code) return Promise.resolve();
+    return DB.collection('promoUsage').add({
+        userId: user.uid, code, orderId, usedAt: firebase.firestore.Timestamp.now()
+    }).then(() =>
+        // Increment global uses counter
+        DB.collection('promoCodes').doc(code).update({ uses: firebase.firestore.FieldValue.increment(1) })
+    ).catch(() => {}); // non-critical
 }
 
 function removePromoCode() { State.setState({ appliedPromo: null }); }
@@ -181,7 +213,7 @@ function cartGrandTotal() {
 
 // ===== ORDERS (Firestore) =====
 function placeOrder(customerInfo) {
-    const { cart, user, appliedPromo, loyaltyRedemption } = State.getState();
+    const { cart, user, appliedPromo, loyaltyRedemption, selectedPaymentMethod } = State.getState();
     if (!cart.length) return Promise.resolve(null);
     const brandId = cart[0].brandId;
     const brand = getBrands().find(b => b.id === brandId);
@@ -215,6 +247,8 @@ function placeOrder(customerInfo) {
         timerEnd: null,
         rated: false,
         scheduledFor: customerInfo.scheduledFor || null,
+        paymentMethod: selectedPaymentMethod || 'cod',
+        paymentId: customerInfo.paymentId || null,
     };
 
     State.setState({ orders: [...State.getState().orders, localOrder] });
@@ -240,7 +274,11 @@ function placeOrder(customerInfo) {
         acceptedAt: null,
         timerEnd: null,
     };
-    return DB.collection('orders').doc(orderId).set(firestoreOrder).then(() => orderId);
+    return DB.collection('orders').doc(orderId).set(firestoreOrder).then(() => {
+        // Track promo usage per-user (non-blocking)
+        if (appliedPromo) recordPromoUsage(appliedPromo.code, orderId);
+        return orderId;
+    });
 }
 
 function updateOrderStatus(orderId, status) {
@@ -563,6 +601,100 @@ function deductInventoryForOrder(order) {
             }
         });
     });
+}
+
+// ===================================================
+// ===== ORDER CANCELLATION =====
+// ===================================================
+
+function cancelOrder(orderId, reason) {
+    const { user } = State.getState();
+    const now = firebase.firestore.Timestamp.now();
+    const firestoreUpdate = {
+        status: 'cancelled',
+        cancelledAt: now,
+        cancelReason: reason || 'Customer requested cancellation',
+        cancelledBy: user ? user.uid : 'customer',
+    };
+    const orders = State.getState().orders.map(o =>
+        o.id !== orderId ? o : { ...o, status: 'cancelled', cancelReason: reason }
+    );
+    State.setState({ orders });
+    return DB.collection('orders').doc(orderId).update(firestoreUpdate);
+}
+
+function adminCancelOrder(orderId, reason) {
+    const now = firebase.firestore.Timestamp.now();
+    const firestoreUpdate = {
+        status: 'cancelled',
+        cancelledAt: now,
+        cancelReason: reason || 'Cancelled by restaurant',
+        cancelledBy: 'admin',
+    };
+    const orders = State.getState().orders.map(o =>
+        o.id !== orderId ? o : { ...o, status: 'cancelled', cancelReason: reason }
+    );
+    State.setState({ orders });
+    return DB.collection('orders').doc(orderId).update(firestoreUpdate);
+}
+
+// ===================================================
+// ===== BUSINESS HOURS & SETTINGS =====
+// ===================================================
+
+const DEFAULT_HOURS = {
+    mon: { open: '10:00', close: '22:00', closed: false },
+    tue: { open: '10:00', close: '22:00', closed: false },
+    wed: { open: '10:00', close: '22:00', closed: false },
+    thu: { open: '10:00', close: '22:00', closed: false },
+    fri: { open: '10:00', close: '23:00', closed: false },
+    sat: { open: '10:00', close: '23:00', closed: false },
+    sun: { open: '11:00', close: '22:00', closed: false },
+};
+
+function saveBusinessHours(hours) {
+    return DB.collection('settings').doc('businessHours').set({ hours, updatedAt: firebase.firestore.Timestamp.now() })
+        .then(() => {
+            const { settings } = State.getState();
+            State.setState({ settings: { ...(settings || {}), businessHours: hours } });
+        });
+}
+
+function saveStoreStatus(isOpen) {
+    return DB.collection('settings').doc('storeStatus').set({ isOpen, updatedAt: firebase.firestore.Timestamp.now() })
+        .then(() => {
+            const { settings } = State.getState();
+            State.setState({ settings: { ...(settings || {}), storeOpen: isOpen } });
+        });
+}
+
+function isStoreCurrentlyOpen() {
+    const { settings } = State.getState();
+    if (!settings) return true; // Default open if no settings
+    if (settings.storeOpen === false) return false;
+    if (!settings.businessHours) return true;
+    const now = new Date();
+    const days = ['sun','mon','tue','wed','thu','fri','sat'];
+    const day = days[now.getDay()];
+    const todayHours = settings.businessHours[day];
+    if (!todayHours || todayHours.closed) return false;
+    const [oh, om] = (todayHours.open || '00:00').split(':').map(Number);
+    const [ch, cm] = (todayHours.close || '23:59').split(':').map(Number);
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const openMin = oh * 60 + om;
+    const closeMin = ch * 60 + cm;
+    return nowMin >= openMin && nowMin < closeMin;
+}
+
+// ===================================================
+// ===== IMAGE UPLOAD (Firebase Storage) =====
+// ===================================================
+
+function uploadMenuItemImage(brandId, itemId, file) {
+    if (!window.firebase.storage) return Promise.reject('Firebase Storage not configured');
+    const STORAGE = firebase.storage();
+    const ref = STORAGE.ref(`menuItems/${brandId}/${itemId}_${Date.now()}.${file.name.split('.').pop()}`);
+    return ref.put(file).then(snap => snap.ref.getDownloadURL());
 }
 
 // ---- MANUAL WASTE LOG ----
